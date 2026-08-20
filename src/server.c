@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include "server.h"
+#include "picohttpparser.h"
 
 void new_server(server_t *self, config_t *cfg) {
     struct sockaddr_in addr;
@@ -16,13 +17,19 @@ void new_server(server_t *self, config_t *cfg) {
     
     int _socket = socket(cfg->domain, cfg->service, cfg->protocol);
     if(_socket < 0) {
-        fprintf(stderr, "error: new_socket: socket create failed\n");
+        fprintf(stderr, "error: socket create failed\n");
+        exit(EXIT_FAILURE);
+    }
+
+    int opt = 1;
+    if (setsockopt(_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        fprintf(stderr, "error: set socket otp failed\n");
         exit(EXIT_FAILURE);
     }
 
     int _bind = bind(_socket, (struct sockaddr *)&addr, sizeof(addr));
     if(_bind < 0) {
-        fprintf(stderr, "error: new_socket: bind failed\n");
+        fprintf(stderr, "error: bind failed\n");
         exit(EXIT_FAILURE);
     }
 
@@ -61,9 +68,16 @@ void print_sockaddr(const struct sockaddr *sa) {
     else {
         printf("Unknown address family: %d\n", sa->sa_family);
     }
-}
+}   
 
 void server_start(server_t *self) {
+    const char *method = NULL;
+    size_t method_len = 0;
+    const char *path = NULL;
+    size_t path_len = 0;
+    int minor_version = 0;
+    struct phr_header headers[100];
+    size_t num_headers = sizeof(headers) / sizeof(headers[0]);
     char buffer[DEFAULT_BUFFER];
     print_sockaddr((struct sockaddr *)&self->address);
     while (1) {
@@ -73,7 +87,33 @@ void server_start(server_t *self) {
         ssize_t bytesRead = read(new_socket, buffer, DEFAULT_BUFFER - 1);
         if (bytesRead >= 0) {
             buffer[bytesRead] = '\0';
-            puts(buffer);
+            int bytes_parsed = phr_parse_request(buffer, strlen(buffer), 
+                    &method, &method_len, 
+                    &path, &path_len, 
+                    &minor_version,
+                    headers, &num_headers, 0);
+            if (bytes_parsed == -1) {
+               printf("Error: Request parsing failed (malformed format).\n");
+            } else if (bytes_parsed == -2) {
+               printf("Status: Request is incomplete (awaiting more data over socket).\n");
+            }
+            printf("--- Request Line ---\n");
+            printf("Method:  %.*s\n", (int)method_len, method);
+            printf("--- Request Line ---\n");
+            printf("Method:  %.*s\n", (int)method_len, method);
+            printf("Path:    %.*s\n", (int)path_len, path);
+            printf("Version: HTTP/1.%d\n\n", minor_version);
+
+            printf("--- Headers (%zu found) ---\n", num_headers);
+            for (size_t i = 0; i < num_headers; i++) {
+                printf("%.*s: %.*s\n", 
+                    (int)headers[i].name_len, headers[i].name, 
+                    (int)headers[i].value_len, headers[i].value
+                );
+            }
+            const char *body = buffer + bytes_parsed;
+            printf("\n--- Body ---\n");
+            printf("%s\n", body);
         } else {
             perror("Error reading buffer...\n");
         }
